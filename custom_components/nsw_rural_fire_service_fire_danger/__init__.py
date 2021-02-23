@@ -163,19 +163,6 @@ class NswRfsFireDangerFeedEntityManager:
 
         _LOGGER.debug("Feed entity manager initialized")
 
-    @staticmethod
-    def _attribute_in_structure(obj, keys):
-        """Return the attribute found under the chain of keys."""
-        key = keys.pop(0)
-        if key in obj:
-            return (
-                NswRfsFireDangerFeedEntityManager._attribute_in_structure(
-                    obj[key], keys
-                )
-                if keys
-                else obj[key]
-            )
-
     async def async_update(self):
         """Get the latest data from REST API and update the state."""
         _LOGGER.debug("Start updating feed")
@@ -186,32 +173,29 @@ class NswRfsFireDangerFeedEntityManager:
         if value:
             try:
                 value = xmltodict.parse(value)
-                districts = self._attribute_in_structure(
-                    value, [XML_FIRE_DANGER_MAP, XML_DISTRICT]
+                districts = {
+                    k[XML_NAME]: dict(k)
+                    for k in value[XML_FIRE_DANGER_MAP][XML_DISTRICT]
+                }
+                district = districts.get(self._district_name)
+
+                for key, replacement in SENSOR_ATTRIBUTES.items():
+                    if key not in district:
+                        # Ignore items not in sensor_attributes
+                        continue
+                    text_value = district.get(key)
+                    conversion = replacement[1]
+                    if conversion:
+                        text_value = conversion(text_value)
+                    attributes[replacement[0]] = text_value
+
+                self._state = STATE_OK
+                self._attributes = attributes
+                # Dispatch to sensors.
+                async_dispatcher_send(
+                    self._hass,
+                    f"nsw_rfs_fire_danger_update_{self._district_name}",
                 )
-                if districts and isinstance(districts, list):
-                    for district in districts:
-                        if XML_NAME in district:
-                            district_name = district.get(XML_NAME)
-                            if district_name == self._district_name:
-                                # Found it.
-                                for key in SENSOR_ATTRIBUTES:
-                                    if key in district:
-                                        text_value = district.get(key)
-                                        conversion = SENSOR_ATTRIBUTES[key][1]
-                                        if conversion:
-                                            text_value = conversion(text_value)
-                                        attributes[
-                                            SENSOR_ATTRIBUTES[key][0]
-                                        ] = text_value
-                                self._state = STATE_OK
-                                self._attributes = attributes
-                                # Dispatch to sensors.
-                                async_dispatcher_send(
-                                    self._hass,
-                                    f"nsw_rfs_fire_danger_update_{self._district_name}",
-                                )
-                                break
             except ExpatError as ex:
                 _LOGGER.warning("Unable to parse feed data: %s", ex)
 
