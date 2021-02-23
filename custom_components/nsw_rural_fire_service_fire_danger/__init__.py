@@ -9,8 +9,6 @@ from homeassistant.components.rest.data import RestData
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import (
     CONF_SCAN_INTERVAL,
-    MAJOR_VERSION,
-    MINOR_VERSION,
     STATE_OK,
     STATE_UNKNOWN,
 )
@@ -25,15 +23,19 @@ from .config_flow import configured_instances
 from .const import (
     COMPONENTS,
     CONF_DISTRICT_NAME,
+    DEFAULT_ATTRIBUTION,
     DEFAULT_METHOD,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     SENSOR_ATTRIBUTES,
-    URL,
+    DEFAULT_URL,
     XML_DISTRICT,
     XML_FIRE_DANGER_MAP,
     XML_NAME,
+    ESA_URL,
+    ACT_DEFAULT_ATTRIBUTION,
+    ESA_DISTRICTS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -103,6 +105,74 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry):
     return unload_ok
 
 
+class NswRfsFireDangerApi:
+    URL = DEFAULT_URL
+    ATTRIBUTION = DEFAULT_ATTRIBUTION
+
+    def __init__(self, hass):
+        self.hass = hass
+        self.rest = RestData(
+            self.hass,
+            DEFAULT_METHOD,
+            self.URL,
+            None,
+            None,
+            None,
+            None,
+            DEFAULT_VERIFY_SSL,
+        )
+        self._data = None
+
+    async def async_update(self):
+        await self.rest.async_update()
+        self._data = self.rest.data
+
+    @property
+    def attribution(self):
+        return self.ATTRIBUTION
+
+    @property
+    def data(self):
+        return self._data
+
+    @property
+    def extra_attrs(self):
+        return dict()
+
+
+class ActEsaFireDangerApi(NswRfsFireDangerApi):
+    URL = ESA_URL
+    ATTRIBUTION = ACT_DEFAULT_ATTRIBUTION
+
+    async def async_update(self):
+        await super().async_update()
+        # At the end of the bushfire season, the ESA return a blank file
+        # TODO: do a better check of whats going on
+        if not self._data:
+            api = NswRfsFireDangerApi(self.hass)
+            await api.rest.async_update()
+            self._data = api.rest.data
+            self.DEFAULT_ATTRIBUTION = (
+                api.DEFAULT_ATTRIBUTION
+            )  # TODO: This should likely b e a property or something
+            _LOGGER.warn("Requested data from ESA API but falling back to RFS")
+
+    @property
+    def extra_attrs(self):
+        import xmltodict
+
+        if not self.data:
+            return dict()
+
+        parse = xmltodict.parse(self.data)
+        if "rss" not in parse:
+            return dict()
+
+        value = parse["rss"]["channel"]
+
+        return {"publish date": value["pubDate"], "build date": value["lastBuildDate"]}
+
+
 class NswRfsFireDangerFeedEntityManager:
     """Feed Entity Manager for NSW Rural Fire Service Fire Danger feed."""
 
@@ -114,28 +184,27 @@ class NswRfsFireDangerFeedEntityManager:
         self._config_entry_id = config_entry.entry_id
         self._scan_interval = timedelta(seconds=config_entry.data[CONF_SCAN_INTERVAL])
         self._track_time_remove_callback = None
-        # Distinguish multiple cases:
-        # 1. If version <= 0.118: 6 arguments
-        # 2. If version >= 0.119 and <= 2020.12: 7 arguments (added 'params' as 6th)
-        # 3. If version >= 2021.1: 8 arguments (added 'hass' as 1st)
-        if MAJOR_VERSION >= 2021:
-            self._rest = RestData(
-                hass, DEFAULT_METHOD, URL, None, None, None, None, DEFAULT_VERIFY_SSL
-            )
-        elif MAJOR_VERSION >= 1 or MINOR_VERSION >= 119:
-            self._rest = RestData(
-                DEFAULT_METHOD, URL, None, None, None, None, DEFAULT_VERIFY_SSL
+        self._attributes = None
+        if self._district_name in ESA_DISTRICTS:
+            self._api = ActEsaFireDangerApi(self._hass)
+            _LOGGER.info(
+                "District {} is in ACT ESA jurisdiction".format(self._district_name)
             )
         else:
-            self._rest = RestData(
-                DEFAULT_METHOD, URL, None, None, None, DEFAULT_VERIFY_SSL
+            self._api = NswRfsFireDangerApi(self._hass)
+            _LOGGER.info(
+                "District {} is in NSW RFS jurisdiction".format(self._district_name)
             )
-        self._attributes = None
 
     @property
     def district_name(self) -> str:
         """Return the district name of the manager."""
         return self._district_name
+
+    @property
+    def attribution(self):
+        """Return the attribution of the manager."""
+        return self._api.attribution
 
     @property
     def attributes(self):
@@ -166,13 +235,21 @@ class NswRfsFireDangerFeedEntityManager:
     async def async_update(self):
         """Get the latest data from REST API and update the state."""
         _LOGGER.debug("Start updating feed")
-        await self._rest.async_update()
-        value = self._rest.data
+        await self._api.async_update()
+        value = self._api.data
         attributes = {}
         self._state = STATE_UNKNOWN
         if value:
             try:
                 value = xmltodict.parse(value)
+
+                # The ESA has some extra data we need to strip
+                if XML_FIRE_DANGER_MAP not in value:
+                    value = value["rss"]["channel"]
+                    value[XML_FIRE_DANGER_MAP][XML_DISTRICT] = [
+                        value[XML_FIRE_DANGER_MAP][XML_DISTRICT]
+                    ]
+
                 districts = {
                     k[XML_NAME]: dict(k)
                     for k in value[XML_FIRE_DANGER_MAP][XML_DISTRICT]

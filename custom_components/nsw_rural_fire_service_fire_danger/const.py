@@ -4,6 +4,7 @@ from datetime import timedelta
 CONF_DISTRICT_NAME = "district_name"
 
 DEFAULT_ATTRIBUTION = "NSW Rural Fire Service"
+ACT_DEFAULT_ATTRIBUTION = "ACT Emergency Services Agency"
 
 DEFAULT_FORCE_UPDATE = True
 DEFAULT_METHOD = "GET"
@@ -20,6 +21,10 @@ SENSOR_ATTRIBUTES = {
     "DangerLevelToday": ["danger_level_today", lambda x: x.lower().capitalize()],
     "DangerLevelTomorrow": ["danger_level_tomorrow", lambda x: x.lower().capitalize()],
     "FireBanToday": ["fire_ban_today", lambda x: x == "Yes"],
+    # Note: Possibly misleading, Seems to return 'No' even if tomorrows
+    # danger level has not been set. I would have thought a TOBAN and the
+    # level are set at the same time. Possibly misleading?
+    # However this is consistent with how it's shown on the RFS website
     "FireBanTomorrow": ["fire_ban_tomorrow", lambda x: x == "Yes"],
 }
 
@@ -34,7 +39,8 @@ TYPES = {
 
 COMPONENTS = ["binary_sensor", "sensor"]
 
-URL = "http://www.rfs.nsw.gov.au/feeds/fdrToban.xml"
+DEFAULT_URL = "http://www.rfs.nsw.gov.au/feeds/fdrToban.xml"
+ESA_URL = "https://esa.act.gov.au/feeds/firedangerrating.xml"
 
 VALID_DISTRICT_NAMES = [
     "Far North Coast",
@@ -59,6 +65,8 @@ VALID_DISTRICT_NAMES = [
     "South Western",
     "Far Western",
 ]
+
+ESA_DISTRICTS = {"ACT"}
 
 XML_DISTRICT = "District"
 XML_FIRE_DANGER_MAP = "FireDangerMap"

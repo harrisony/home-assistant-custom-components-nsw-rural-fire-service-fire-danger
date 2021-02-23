@@ -33,7 +33,8 @@ class NswFireServiceFireDangerEntity(Entity):
         self._state = STATE_UNKNOWN
         self._attributes = {
             "district": self._district_name,
-            ATTR_ATTRIBUTION: DEFAULT_ATTRIBUTION,
+            ATTR_ATTRIBUTION: manager.attribution,
+            **manager._api.extra_attrs,
         }
         self._remove_signal_update = None
 
